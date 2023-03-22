@@ -1,8 +1,11 @@
 import { HOST_URL } from '@/utils/hostUrl'
 import { OpenAIStream, OpenAIStreamPayload } from '@/utils/OpenAIStream'
+import { randomChooseFromApiToken } from '@/utils/randomChooseFromApiToken'
+import { selectAPaidKey } from '@/utils/selectApiKeyBasedOnUserIsPaidOrNot'
+import { sendAlertToDiscord } from '@/utils/sendMessageToDiscord'
 import { GenerateApiInput } from '@/utils/types'
 import { NextRequest } from 'next/server'
-import { MAX_TOKENS } from './../../utils/constants'
+import { MAX_TOKENS, PROMPT_SECRET } from './../../utils/constants'
 
 if (!process.env.OPENAI_API_KEY) {
   throw new Error('Missing env var from OpenAI')
@@ -53,8 +56,39 @@ const handler = async (req: NextRequest): Promise<Response> => {
     n: 1,
   }
 
-  const stream = await OpenAIStream(payload, userKey)
-  return new Response(stream)
+  async function execute(currentRetryTimes: number): Promise<any> {
+    let openAIKey = userKey
+      ? await selectAPaidKey(userKey)
+      : randomChooseFromApiToken({ isPaid: false })
+
+    try {
+      const stream = await OpenAIStream(payload, openAIKey, userKey)
+      if (id) {
+        await incUsage(id, !!userKey)
+      }
+      return new Response(stream)
+    } catch (e) {
+      const log =
+        '🚨 Error in OpenAIStream' +
+        'the last 4 digits:' +
+        openAIKey.slice(0, -4) +
+        (e as any).message
+      console.error(log)
+      await sendAlertToDiscord(log)
+
+      if (
+        currentRetryTimes > 3 ||
+        log.includes('Please reduce the length of the messages.')
+      ) {
+        throw e
+      } else {
+        console.log('Retrying...')
+        return execute(currentRetryTimes + 1)
+      }
+    }
+  }
+
+  return execute(0)
 }
 
 export default handler
@@ -63,7 +97,7 @@ function fetchPrompt(id: string) {
   return fetch(`${HOST_URL}/api/app-prompt`, {
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.PROMPT_SECRET}`,
+      Authorization: `Bearer ${PROMPT_SECRET}`,
     },
     method: 'POST',
     body: JSON.stringify({ id }),
@@ -72,4 +106,15 @@ function fetchPrompt(id: string) {
     .then((data) => {
       return data as { prompt: string }
     })
+}
+
+function incUsage(id: string, isPaid: boolean) {
+  return fetch(`${HOST_URL}/api/inc-usage`, {
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${PROMPT_SECRET}`,
+    },
+    method: 'POST',
+    body: JSON.stringify({ id, isPaid }),
+  })
 }

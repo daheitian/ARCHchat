@@ -1,15 +1,16 @@
 import AppList from '@/components/AppList'
+import AppListLoading from '@/components/AppListLoading'
 import { Button } from '@/components/Button'
 import { CallToAction } from '@/components/CallToAction'
 import { Footer } from '@/components/Footer'
-import { HandPointer } from '@/components/HandPointer'
 import { Header } from '@/components/Header'
 import { Hero } from '@/components/Hero'
 import { SearchInput } from '@/components/SearchInput'
-import { appRouter } from '@/server/api/root'
-import { prisma } from '@/server/db'
-import { PlusCircleIcon } from '@heroicons/react/24/outline'
-import type { GetStaticProps, InferGetServerSidePropsType } from 'next'
+import { api } from '@/utils/api'
+import type { GetStaticProps } from 'next'
+import { useTranslation } from 'next-i18next'
+import { serverSideTranslations } from 'next-i18next/serverSideTranslations'
+import * as R from 'ramda'
 import { useState } from 'react'
 
 type App = {
@@ -18,57 +19,88 @@ type App = {
   description: string
   icon: string
 }
-type PageProps = { apps: App[] }
+type PageProps = {}
 
-export const getStaticProps: GetStaticProps<PageProps> = async () => {
-  const caller = appRouter.createCaller({ prisma, session: null })
-  const apps = await caller.app.getAll()
-
+export const getStaticProps: GetStaticProps<PageProps> = async ({ locale }) => {
   return {
     props: {
-      apps,
+      ...(await serverSideTranslations(locale!, ['common'])),
     },
-    revalidate: 120, // In seconds
+    // TODO: disabled because of i18n, and switched to CSR
+    // revalidate: 120, // In seconds
   }
 }
 
-const Home = (props: InferGetServerSidePropsType<typeof getStaticProps>) => {
-  const { apps } = props
+const Home = () => {
   const [searchValue, setSearchValue] = useState('')
+  const [sizeToShow, setSizeToShow] = useState(100)
+  // @ts-ignore
+  const { t } = useTranslation('common')
 
-  const list = searchValue
-    ? apps.filter(
-        (app) =>
-          app.name.includes(searchValue) ||
-          app.description.includes(searchValue)
-      )
-    : apps
+  const { isLoading, data: apps } = api.app.getAll.useQuery()
+
+  const list = (
+    searchValue
+      ? apps!.filter(
+          (app) =>
+            app.name.includes(searchValue) ||
+            app.description.includes(searchValue)
+        )
+      : apps
+  ) as App[]
+
+  const handleShowMore = () => {
+    setSizeToShow(sizeToShow + 100)
+  }
+
+  if (isLoading) {
+    return (
+      <>
+        <Header />
+        <main>
+          <Hero />
+          <div className="w-full bg-slate-50 pb-20 pt-10">
+            <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+              <div className="mb-10 grid grid-cols-1 items-center justify-between pt-10 sm:grid-cols-3 sm:pt-0 ">
+                <div />
+                <SearchInput
+                  setSearchValue={setSearchValue}
+                  placeholder={'Search apps...'}
+                />
+                <div />
+              </div>
+              <AppListLoading />
+            </div>
+          </div>
+          <CallToAction />
+        </main>
+        <Footer />
+      </>
+    )
+  }
 
   return (
     <>
       <Header />
       <main>
         <Hero />
-        <div className="w-full bg-slate-50 pb-20">
+        <div className="w-full bg-slate-50 pb-20 pt-10">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-            <div className="grid grid-cols-1 items-center justify-between pt-10 sm:grid-cols-3 sm:pt-0">
+            <div className="mb-10 grid grid-cols-1 items-center justify-between pt-10 sm:grid-cols-3 sm:pt-0 ">
               <div />
               <SearchInput
                 setSearchValue={setSearchValue}
-                placeholder={`Search ${apps.length} apps...`}
+                placeholder={`Search ${apps!.length} apps...`}
               />
-
-              <div className="mb-2 flex items-center justify-end gap-4 py-10">
-                <HandPointer />
-                <Button variant="solid" color="blue" href="/app/new">
-                  <div className="flex items-center gap-2">
-                    <PlusCircleIcon className="h-6 w-6"></PlusCircleIcon>
-                    <span className="whitespace-nowrap">创建应用</span>
-                  </div>
-                </Button>
-              </div>
+              <div />
             </div>
-            <AppList list={list} />
+            <AppList list={R.take(sizeToShow, list)} />
+
+            <div className="mt-10 flex justify-center">
+              <Button color="blue" onClick={handleShowMore}>
+                {t('load_more')}
+              </Button>
+            </div>
           </div>
         </div>
         {/* <PrimaryFeatures /> */}
